@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contrôle LED ESP32 - MQTT avec Programmation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .btn-control:active { transform: scale(0.98); }
+        @keyframes green-glow {
+            0% { box-shadow: 0 0 15px rgba(52, 211, 153, 0.4), 0 0 25px rgba(52, 211, 153, 0.2); }
+            50% { box-shadow: 0 0 25px rgba(52, 211, 153, 0.6), 0 0 35px rgba(52, 211, 153, 0.4); }
+            100% { box-shadow: 0 0 15px rgba(52, 211, 153, 0.4), 0 0 25px rgba(52, 211, 153, 0.2); }
+        }
+        .is-on-green { 
+            animation: green-glow 1.8s infinite alternate; 
+            background-color: #34d399 !important; 
+            border-color: #10b981 !important; 
+        }
+        .loader {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 4px solid #fff;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .timer-display {
+            font-variant-numeric: tabular-nums;
+        }
+        .schedule-item {
+            transition: all 0.3s ease;
+        }
+        .schedule-item:hover {
+            transform: translateY(-2px);
+        }
+        /* Suppression des avertissements de source map */
+        .source-map-warning {
+            display: none !important;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+</head>
+<body class="bg-gradient-to-br from-gray-900 to-black min-h-screen p-4 antialiased">
+
+<div class="max-w-6xl mx-auto">
+    <!-- Header -->
+    <header class="text-center mb-8">
+        <h1 class="text-4xl sm:text-5xl font-extrabold text-emerald-400 mb-3 leading-tight">
+            <i class="fas fa-lightbulb text-emerald-500 mr-3"></i> 
+            Panneau de Contrôle LED
+        </h1>
+        <p class="text-gray-400 text-md font-light">Contrôle avancé avec minuterie et programmation horaire</p>
+    </header>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <!-- Colonne principale - Contrôle direct -->
+        <div class="lg:col-span-2">
+            <div class="bg-gray-800 p-6 sm:p-8 rounded-3xl shadow-2xl border border-gray-700 backdrop-blur-sm bg-opacity-80">
+                <!-- Statut MQTT -->
+                <section class="mb-6 p-4 bg-gray-700 rounded-2xl shadow-lg flex justify-between items-center border border-gray-600">
+                    <h2 class="text-lg font-semibold text-gray-200 flex items-center">
+                        <i class="fas fa-wifi text-blue-400 mr-3"></i> Statut du Broker
+                    </h2>
+                    <div id="mqtt-status-indicator" class="flex items-center space-x-3">
+                        <div id="status-dot" class="w-4 h-4 rounded-full bg-red-500 shadow-lg shadow-red-500/40 transition-colors duration-300"></div>
+                        <span id="mqtt-status" class="font-bold text-red-400 text-base">Déconnecté</span>
+                    </div>
+                </section>
+
+                <button onclick="connectMqtt()" id="btn-reconnect" 
+                        class="w-full py-3 mb-6 rounded-xl text-lg font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-all duration-300 
+                                shadow-md shadow-blue-600/30 flex items-center justify-center space-x-2
+                                disabled:bg-gray-600 disabled:shadow-none disabled:cursor-not-allowed">
+                    <span id="reconnect-text">Tenter la Reconnexion</span>
+                    <div id="reconnect-spinner" class="loader hidden"></div>
+                </button>
+
+                <!-- Contrôle LED -->
+                <section class="text-center">
+                    <h2 class="text-3xl font-bold text-gray-100 mb-6">Contrôle Direct</h2>
+                    
+                    <div id="led-indicator" class="w-32 h-32 mx-auto rounded-3xl transition-all duration-500 
+                                                    bg-gray-700 border-4 border-gray-600 shadow-inner-lg 
+                                                    flex items-center justify-center mb-6 relative">
+                        <i id="led-icon" class="fas fa-lightbulb text-gray-500 text-5xl transition-colors duration-500"></i>
+                        <span id="led-text" class="absolute bottom-2 text-lg font-extrabold text-gray-500 select-none opacity-0">OFF</span>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4 mb-8">
+                        <button id="btn-on" onclick="publishCommand('ON', this)" 
+                                class="btn-control py-4 rounded-xl font-extrabold text-lg text-white transition-all duration-200 
+                                       bg-emerald-600 hover:bg-emerald-700 shadow-xl shadow-emerald-600/40 
+                                       disabled:bg-gray-600 disabled:shadow-none disabled:opacity-70 disabled:cursor-not-allowed">
+                            <i class="fas fa-toggle-on mr-2"></i> ALLUMER
+                        </button>
+                        <button id="btn-off" onclick="publishCommand('OFF', this)" 
+                                class="btn-control py-4 rounded-xl font-extrabold text-lg text-white transition-all duration-200 
+                                       bg-red-600 hover:bg-red-700 shadow-xl shadow-red-600/40 
+                                       disabled:bg-gray-600 disabled:shadow-none disabled:opacity-70 disabled:cursor-not-allowed">
+                            <i class="fas fa-toggle-off mr-2"></i> ÉTEINDRE
+                        </button>
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <!-- Colonne latérale - Programmation -->
+        <div class="space-y-6">
+            <!-- Minuterie -->
+            <div class="bg-gray-800 p-6 rounded-3xl shadow-2xl border border-gray-700 backdrop-blur-sm bg-opacity-80">
+                <h3 class="text-xl font-bold text-gray-100 mb-4 flex items-center">
+                    <i class="fas fa-clock text-yellow-400 mr-3"></i> Minuterie
+                </h3>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-300 mb-2">Durée avant extinction (minutes)</label>
+                        <input type="number" id="timer-duration" min="1" max="1440" 
+                               class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                               placeholder="Ex: 30">
+                    </div>
+                    
+                    <button onclick="startTimer()" id="btn-start-timer"
+                            class="w-full py-3 rounded-lg font-semibold bg-yellow-600 text-white hover:bg-yellow-700 transition-all duration-300 
+                                   shadow-md shadow-yellow-600/30 disabled:bg-gray-600 disabled:shadow-none">
+                        <i class="fas fa-play mr-2"></i> Démarrer la minuterie
+                    </button>
+                    
+                    <div id="timer-display" class="text-center hidden">
+                        <div class="text-2xl font-bold text-yellow-400 timer-display" id="timer-countdown">00:00</div>
+                        <div class="text-sm text-gray-400">Temps restant</div>
+                    </div>
+                    
+                    <button onclick="stopTimer()" id="btn-stop-timer" 
+                            class="w-full py-2 rounded-lg font-semibold bg-red-600 text-white hover:bg-red-700 transition-all duration-300 hidden">
+                        <i class="fas fa-stop mr-2"></i> Arrêter la minuterie
+                    </button>
+                </div>
+            </div>
+
+            <!-- Programmation horaire -->
+            <div class="bg-gray-800 p-6 rounded-3xl shadow-2xl border border-gray-700 backdrop-blur-sm bg-opacity-80">
+                <h3 class="text-xl font-bold text-gray-100 mb-4 flex items-center">
+                    <i class="fas fa-calendar-alt text-purple-400 mr-3"></i> Programmation
+                </h3>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-300 mb-2">Heure d'allumage</label>
+                        <input type="time" id="schedule-on-time" 
+                               class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-300 mb-2">Heure d'extinction</label>
+                        <input type="time" id="schedule-off-time" 
+                               class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+                    </div>
+                    
+                    <div class="flex items-center space-x-2">
+                        <input type="checkbox" id="schedule-active" 
+                               class="w-4 h-4 text-purple-600 bg-gray-700 border-gray-600 rounded focus:ring-purple-500">
+                        <label for="schedule-active" class="text-sm text-gray-300">Activer la programmation</label>
+                    </div>
+                    
+                    <div id="schedule-status" class="text-sm text-center text-gray-400 hidden">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        <span id="schedule-status-text"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Journal des événements -->
+            <div class="bg-gray-800 p-6 rounded-3xl shadow-2xl border border-gray-700 backdrop-blur-sm bg-opacity-80">
+                <h3 class="text-xl font-bold text-gray-100 mb-4 flex items-center">
+                    <i class="fas fa-history text-blue-400 mr-3"></i> Journal
+                </h3>
+                
+                <div id="event-log" class="space-y-2 max-h-32 overflow-y-auto">
+                    <div class="text-sm text-gray-400 text-center">Aucun événement récent</div>
+                </div>
+                
+                <button onclick="clearEventLog()" 
+                        class="w-full mt-4 py-2 text-sm rounded-lg font-medium bg-gray-700 text-gray-300 hover:bg-gray-600 transition-all duration-300">
+                    <i class="fas fa-trash mr-2"></i> Effacer le journal
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- Configuration MQTT ---
+    const MQTT_HOST = "a2931694d885454ca03497a84a79ad1f.s1.eu.hivemq.cloud"; 
+    const MQTT_PORT = 8884; 
+    const MQTT_PATH = "/mqtt"; 
+    const MQTT_USER = "hivemq.webclient.1761781347861"; 
+    const MQTT_PASS = ">k56BKlQO2LtuA%4#e<y"; 
+    const TOPIC_COMMAND = "esp32/led/command";
+    const TOPIC_STATUS = "esp32/led/status";
+
+    // --- Variables globales ---
+    let client = null;
+    let timerInterval = null;
+    let timerEndTime = null;
+    let scheduleInterval = null;
+    let eventLog = [];
+    let isConnecting = false;
+
+    // --- Éléments du DOM ---
+    const statusEl = document.getElementById('mqtt-status');
+    const statusDotEl = document.getElementById('status-dot');
+    const ledIndicatorEl = document.getElementById('led-indicator');
+    const ledTextEl = document.getElementById('led-text');
+    const ledIconEl = document.getElementById('led-icon'); 
+    const btnOn = document.getElementById('btn-on');
+    const btnOff = document.getElementById('btn-off');
+    const btnReconnect = document.getElementById('btn-reconnect');
+    const reconnectText = document.getElementById('reconnect-text');
+    const reconnectSpinner = document.getElementById('reconnect-spinner');
+
+    // --- Fonctions de gestion de l'état des boutons ---
+    function enableControlButtons() {
+        btnOn.disabled = false;
+        btnOff.disabled = false;
+    }
+
+    function disableControlButtons(button) {
+        button.disabled = true;
+    }
+
+    // --- Fonctions de mise à jour UI ---
+    function updateMqttStatus(isConnected, isConnecting = false) {
+        if(isConnecting){
+            reconnectText.textContent = "Connexion...";
+            reconnectSpinner.classList.remove('hidden');
+            btnReconnect.disabled = true;
+            statusEl.textContent = "Connexion...";
+            statusEl.className = "font-bold text-yellow-400";
+            statusDotEl.className = "w-4 h-4 rounded-full bg-yellow-500 shadow-yellow-500/50 transition-colors duration-300";
+        } else if(isConnected){
+            reconnectText.textContent = "Connecté";
+            reconnectSpinner.classList.add('hidden');
+            btnReconnect.disabled = true;
+            statusEl.textContent = "Connecté";
+            statusEl.className = "font-bold text-green-400";
+            statusDotEl.className = "w-4 h-4 rounded-full bg-green-500 shadow-green-500/50 transition-colors duration-300";
+            enableControlButtons();
+        } else {
+            reconnectText.textContent = "Tenter la Reconnexion";
+            reconnectSpinner.classList.add('hidden');
+            btnReconnect.disabled = false;
+            statusEl.textContent = "Déconnecté";
+            statusEl.className = "font-bold text-red-400";
+            statusDotEl.className = "w-4 h-4 rounded-full bg-red-500 shadow-red-500/50 transition-colors duration-300";
+            btnOn.disabled = true;
+            btnOff.disabled = true;
+            updateLedStateUI('WAITING');
+        }
+    }
+
+    function updateLedStateUI(state){
+        const newState = state.toUpperCase();
+        ledTextEl.textContent = newState;
+        ledIndicatorEl.classList.remove('is-on-green','bg-emerald-400','border-emerald-300','bg-gray-700','border-gray-600');
+        ledIconEl.classList.remove('text-emerald-300','text-gray-500','animate-pulse');
+        ledTextEl.classList.add('opacity-0');
+
+        if(newState === 'ON'){
+            ledIndicatorEl.classList.add('is-on-green','bg-emerald-400','border-emerald-300');
+            ledIconEl.classList.add('text-emerald-300');
+        } else if(newState === 'OFF'){
+            ledIndicatorEl.classList.add('bg-gray-700','border-gray-600','shadow-inner-lg');
+            ledIconEl.classList.add('text-gray-500');
+        } else if(newState === 'WAITING'){
+            ledIndicatorEl.classList.add('bg-gray-700','border-gray-600','shadow-inner-lg');
+            ledIconEl.classList.add('text-gray-500','animate-pulse');
+        }
+    }
+
+    // --- Journal des événements ---
+    function addEventToLog(event) {
+        const timestamp = new Date().toLocaleTimeString('fr-FR');
+        eventLog.unshift({ time: timestamp, event: event });
+        if (eventLog.length > 10) eventLog.pop();
+        
+        const logContainer = document.getElementById('event-log');
+        logContainer.innerHTML = eventLog.map(item => 
+            `<div class="text-sm text-gray-300">
+                <span class="text-gray-500">${item.time}</span> - ${item.event}
+            </div>`
+        ).join('');
+    }
+
+    function clearEventLog() {
+        eventLog = [];
+        document.getElementById('event-log').innerHTML = '<div class="text-sm text-gray-400 text-center">Aucun événement récent</div>';
+    }
+
+    // --- Gestionnaires d'événements MQTT ---
+    function onConnect() {
+        console.log("Connecté à HiveMQ Cloud.");
+        updateMqttStatus(true);
+        client.subscribe(TOPIC_STATUS, { qos: 1 });
+        addEventToLog('Connecté au broker MQTT');
+        
+        // Demander l'état initial
+        publishCommand('STATUS', btnOn);
+    }
+
+    function onConnectionLost(responseObject){
+        console.error("Connexion perdue", responseObject.errorMessage);
+        updateMqttStatus(false);
+        addEventToLog('Connexion MQTT perdue');
+        
+        if (!isConnecting) {
+            setTimeout(() => {
+                if (!client.isConnected()) {
+                    connectMqtt();
+                }
+            }, 5000);
+        }
+    }
+
+    function onMessageArrived(message){
+        const payload = message.payloadString;
+        if(message.destinationName === TOPIC_STATUS){
+            updateLedStateUI(payload);
+            enableControlButtons();
+            addEventToLog(`LED ${payload}`);
+        }
+    }
+
+    function onConnectFailure(responseObject){
+        console.error("Échec de connexion", responseObject.errorMessage);
+        updateMqttStatus(false);
+        addEventToLog('Échec de connexion MQTT');
+        
+        if (!isConnecting) {
+            setTimeout(() => {
+                if (!client || !client.isConnected()) {
+                    connectMqtt();
+                }
+            }, 5000);
+        }
+    }
+
+    // --- Fonctions principales ---
+    function connectMqtt(){
+        if(client && client.isConnected()) return;
+        
+        isConnecting = true;
+        updateMqttStatus(false, true);
+
+        const clientId = "WebClient-"+Math.random().toString(16).substr(2,8);
+        client = new Paho.MQTT.Client(MQTT_HOST, MQTT_PORT, MQTT_PATH, clientId);
+        client.onConnectionLost = onConnectionLost;
+        client.onMessageArrived = onMessageArrived;
+
+        client.connect({
+            onSuccess: () => {
+                isConnecting = false;
+                onConnect();
+            },
+            onFailure: (responseObject) => {
+                isConnecting = false;
+                onConnectFailure(responseObject);
+            },
+            useSSL: true,
+            userName: MQTT_USER,
+            password: MQTT_PASS,
+            cleanSession: true,
+            timeout: 10,
+            keepAliveInterval: 60
+        });
+    }
+
+    function publishCommand(command, clickedButton){
+        if(client && client.isConnected()){
+            const message = new Paho.MQTT.Message(command);
+            message.destinationName = TOPIC_COMMAND;
+            message.retained = false;
+            message.qos = 0;
+            
+            try {
+                client.send(message);
+                console.log(`Commande publiée: ${command}`);
+                
+                if (command !== 'STATUS') {
+                    disableControlButtons(clickedButton);
+                }
+                addEventToLog(`Commande envoyée: ${command}`);
+            } catch (error) {
+                console.error("Erreur lors de l'envoi de la commande:", error);
+                addEventToLog('Erreur: Échec de l\'envoi de la commande');
+            }
+        } else {
+            console.warn("Client non connecté, reconnexion...");
+            addEventToLog('Erreur: Client non connecté');
+            connectMqtt();
+        }
+    }
+
+    // --- Fonctions de minuterie ---
+    function startTimer() {
+        const duration = parseInt(document.getElementById('timer-duration').value);
+        if (!duration || duration <= 0 || duration > 1440) {
+            alert('Veuillez entrer une durée valide (1-1440 minutes)');
+            return;
+        }
+
+        timerEndTime = Date.now() + (duration * 60 * 1000);
+        
+        document.getElementById('timer-display').classList.remove('hidden');
+        document.getElementById('btn-start-timer').classList.add('hidden');
+        document.getElementById('btn-stop-timer').classList.remove('hidden');
+        document.getElementById('timer-duration').disabled = true;
+
+        addEventToLog(`Minuterie démarrée: ${duration} minutes`);
+
+        timerInterval = setInterval(() => {
+            const remaining = timerEndTime - Date.now();
+            
+            if (remaining <= 0) {
+                stopTimer();
+                publishCommand('OFF', btnOff);
+                addEventToLog('Minuterie terminée - LED éteinte');
+                return;
+            }
+
+            const minutes = Math.floor(remaining / 60000);
+            const seconds = Math.floor((remaining % 60000) / 1000);
+            document.getElementById('timer-countdown').textContent = 
+                `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }, 1000);
+    }
+
+    function stopTimer() {
+        if (timerInterval) {
+            clearInterval(timerInterval);
+            timerInterval = null;
+        }
+
+        timerEndTime = null;
+        
+        document.getElementById('timer-display').classList.add('hidden');
+        document.getElementById('btn-start-timer').classList.remove('hidden');
+        document.getElementById('btn-stop-timer').classList.add('hidden');
+        document.getElementById('timer-duration').disabled = false;
+        document.getElementById('timer-countdown').textContent = '00:00';
+
+        addEventToLog('Minuterie arrêtée');
+    }
+
+    // --- Fonctions de programmation horaire ---
+    function checkSchedule() {
+        const scheduleActive = document.getElementById('schedule-active').checked;
+        if (!scheduleActive) return;
+
+        const now = new Date();
+        const currentTime = now.getHours().toString().padStart(2, '0') + ':' + 
+                           now.getMinutes().toString().padStart(2, '0');
+
+        const onTime = document.getElementById('schedule-on-time').value;
+        const offTime = document.getElementById('schedule-off-time').value;
+
+        if (currentTime === onTime) {
+            publishCommand('ON', btnOn);
+            addEventToLog('Programmation: LED allumée');
+        } else if (currentTime === offTime) {
+            publishCommand('OFF', btnOff);
+            addEventToLog('Programmation: LED éteinte');
+        }
+    }
+
+    function updateScheduleStatus() {
+        const scheduleActive = document.getElementById('schedule-active').checked;
+        const onTime = document.getElementById('schedule-on-time').value;
+        const offTime = document.getElementById('schedule-off-time').value;
+        const statusElement = document.getElementById('schedule-status');
+        const statusTextElement = document.getElementById('schedule-status-text');
+
+        if (scheduleActive && onTime && offTime) {
+            statusElement.classList.remove('hidden');
+            statusTextElement.textContent = `Allumage à ${onTime}, extinction à ${offTime}`;
+            
+            if (!scheduleInterval) {
+                scheduleInterval = setInterval(checkSchedule, 60000); // Vérifier chaque minute
+            }
+        } else {
+            statusElement.classList.add('hidden');
+            if (scheduleInterval) {
+                clearInterval(scheduleInterval);
+                scheduleInterval = null;
+            }
+        }
+    }
+
+    // --- Événements ---
+    document.getElementById('schedule-active').addEventListener('change', updateScheduleStatus);
+    document.getElementById('schedule-on-time').addEventListener('change', updateScheduleStatus);
+    document.getElementById('schedule-off-time').addEventListener('change', updateScheduleStatus);
+
+    // --- Initialisation ---
+    window.onload = function(){
+        updateMqttStatus(false);
+        updateLedStateUI('OFF');
+        connectMqtt();
+        addEventToLog('Application démarrée');
+        
+        // Vérifier la programmation toutes les 30 secondes pour plus de précision
+        setInterval(checkSchedule, 30000);
+        
+        // Reconnexion automatique toutes les 60 secondes si déconnecté
+        setInterval(() => {
+            if (!client || !client.isConnected()) {
+                if (!isConnecting) {
+                    connectMqtt();
+                }
+            }
+        }, 60000);
+    };
+</script>
+</body>
+</html>
